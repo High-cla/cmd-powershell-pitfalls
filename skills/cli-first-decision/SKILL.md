@@ -1,118 +1,236 @@
 ---
 name: cli-first-decision
-description: ALWAYS use BEFORE thinking, BEFORE any tool call, and BEFORE dispatching sub-agents. This is the FIRST skill to trigger for ANY task involving file operations, code changes, system commands, or when deciding between approaches (built-in tools, CLI utilities, skills, MCP servers, or sub-agents). Trigger on: any request that might need tools, any Windows/Linux command operations, any batch/PowerShell/shell scripting, any file search/replace/edit operations, or whenever you're about to think about how to accomplish something.
+description: "优先使用 CLI 工具和子智能体委派的决策框架，任何任务前先判断最优工具路径"
 ---
 
 # CLI-First Decision
 
-## Core Rule
-
-**任何任务开始前，按优先级决策：先触发 → 再思考 → 选工具 → 执行**
-
-1. **强制触发**: 收到 ANY 请求后，在开始思考之前、调用任何工具之前、派发子智能体之前，必须先触发此技能进行决策
-2. **思考优先**: 先理解问题本质——明确需求、拆解步骤、判断范围。不要急着摸工具。
-3. **内置工具次之**: 简单读/写/搜索一步直达 → 直接用 Read/Edit/Grep/Glob 等（零额外成本）
-4. **CLI 工具再次**: 批量/机械性操作 → 用对应的 CLI 工具（<1s，参考下方矩阵）
-5. **技能辅助**: 需要领域专知的操作 → 先加载对应 skill 获取指导（参考可用技能列表）
-6. **MCP 工具**: 知识图谱查询、顺序推理、网页抓取等 → 用 MCP server 提供的工具
-7. **子智能体**: 需要多步推理、语义理解、跨模块分析 → 派子智能体（sub-agent）
-8. **自行推理兜底**: 架构决策、设计权衡、审查验证 → 亲自推理或咨询 Oracle
-
-## Decision Tree
+## 优先级决策链
 
 ```
-收到请求（触发）
-  └─ 识别类型：修复/实现/调研/评估/开放式？
-       └─ 推理：先明确需求、拆解步骤、判断范围
-       ├─ 简单读/写/改一个文件已知内容？───→ 内置工具 (Read/Edit/Write)
-       ├─ 机械性批量操作？
-       │   ├─ 批量文本替换？───────────→ git-sed / sd
-       │   ├─ 文件查找？───────────────→ fd-find / glob
-       │   ├─ 内容搜索？───────────────→ rg-search / grep
-       │   ├─ AST 结构化操作？──────────→ ast-grep
-       │   ├─ JSON/YAML/XML 查询？──────→ jq-query / yq
-       │   └─ 其他机械操作？────────────→ 查下方矩阵
-       ├─ 有对应领域 skill 可用？────────→ 先加载 skill 获取指导
-       ├─ 有 MCP 工具可用？
-       │   ├─ 知识图谱/代码关系查询？────→ codebase-memory-mcp
-       │   ├─ 顺序推理/复杂分析？───────→ sequential-thinking
-       │   └─ 网页内容获取？───────────→ fetch
-       ├─ 需要语义理解/多步推理/跨模块？──→ 子智能体 (task/sub-agent)
-       └─ 架构决策/设计权衡/审查？──────→ 自行推理或咨询 Oracle
+触发 -> 思考 -> 拆分子智能体 -> 内置工具 -> CLI -> Skill -> MCP -> 自行推理 -> 压缩
 ```
 
-## Tool Decision Matrix
+## 决策树
 
-| 层级 | 场景 | 首选工具 | 耗时代价 |
-|------|------|---------|---------|
-| **触发** | 接收请求、识别类型、明确意图 | Intent Gate 分类 | 即时 |
-| **推理** | 任务分析、需求拆解、步骤规划 | 先思考，后选工具 | 即时 |
-| **内置** | 简单文件读/写/编辑 | Read / Edit / Write | 即时 |
-| **内置** | 基础内容搜索 | `grep` | <1s |
-| **内置** | 文件模式匹配 | `glob` | <1s |
-| CLI | 批量文本替换（正则） | `git-sed` | <1s |
-| CLI | 文件查找（按名称/类型/时间） | `fd-find` | <1s |
-| CLI | 内容搜索+统计 | `rg-search` (ripgrep) | <1s |
-| CLI | AST 代码搜索/替换（25 语言） | `ast-grep` | <1s |
-| CLI | JSON 查询/转换 | `jq-query` | <1s |
-| CLI | HTTP API 测试 | `git-curl` | <1s |
-| CLI | 模糊过滤/缩小列表 | `fzf-filter` | <1s |
-| CLI | 打包/解压 | `git-tar` | <1s |
-| CLI | 换行符转换（CRLF/LF） | `git-dos2unix` | <1s |
-| CLI | 文本查找替换（更简单语法） | `sd` | <1s |
-| CLI | 代码统计（语言分布） | `tokei` | <1s |
-| CLI | XML/YAML/JSON 查询 | `yq` / `xq` | <1s |
-| **技能** | 领域专知操作（量化/前端/云等） | 加载对应 skill 获取指导 | 见 skill 文档 |
-| **MCP** | 知识图谱/代码关系查询 | `codebase-memory-mcp` | <5s |
-| **MCP** | 顺序推理/多步分析 | `sequential-thinking` | 视步骤 |
-| **MCP** | 网页内容获取 | `fetch` | <10s |
-| **子智能体** | 多步推理、语义理解、跨模块分析 | `task()` 派子智能体 | 数十秒+ |
-| **自行推理** | 架构决策、设计权衡、审查验证 | 亲自处理或 Oracle | 视复杂度 |
+```
+收到请求
+  |- 识别类型：修复 / 实现 / 调研 / 评估？
+  |    |- 先理解问题本质，别急着摸工具
+  |    |- 单步简单操作？
+  |    |   (已知文件 + 已知内容)
+  |    |   -> 直接内置工具，完后 compress
+  |    |- 多步 / 跨模块 / 代码生成 / 重构 / 调研？
+  |    |   |- 拆成 N 个独立单元
+  |    |   |- 无依赖 -> 全并行
+  |    |   |- 有依赖 -> 层内并行，层间串行
+  |    |   |- 每个 prompt 必须 6 部分
+  |    |   -> task(run_in_background=true) 并行派发
+  |    |- 机械操作？
+  |    |   |- 批量替换 -> git-sed / sd
+  |    |   |- 文件查找 -> fd-find / glob
+  |    |   |- 内容搜索 -> rg-search / grep
+  |    |   |- AST 操作 -> ast-grep
+  |    |   |- JSON/YAML -> jq-query / yq
+  |    |- 有领域 skill？-> 先加载再执行
+  |    |- 有 MCP 工具？
+  |    |   |- 代码关系 -> codebase-memory-mcp
+  |    |   |- 顺序推理 -> sequential-thinking
+  |    |   |- 网页抓取 -> fetch
+  |    -> 架构/设计/审查？-> 自行推理 or Oracle
+```
 
-## Quick Tool Reference
+## 压缩四阶段
 
-| 工具 | 典型命令 | 用途 |
-|------|---------|------|
-| `git-sed` | `git-sed expression:"s/old/new/g" files:["src/**/*.ts"] inPlace:""` | 批量正则替换，跨文件编辑 |
-| `fd-find` | `fd-find pattern:"*.xml" extension:"xml" path:"./Characters"` | 按名称/类型/大小/时间查找文件 |
-| `rg-search` | `rg-search pattern:"somePattern" glob:"*.xml" context:2` | 文件内容搜索，PCRE2 正则，上下文行 |
-| `ast-grep` | `ast_grep_search pattern:"if($$$) { $$$ }" lang:"ts"` / `ast_grep_replace pattern:"console.log($MSG)" rewrite:"logger.info($MSG)" lang:"ts"` | AST 结构搜索/替换，理解代码语法树 |
-| `jq-query` | `jq-query filter:".name" file:"data.json"` | JSON 数据查询、过滤、转换 |
-| `git-curl` | `git-curl url:"https://api.example.com" method:"POST" data:'{"key":"val"}'` | HTTP API 请求，支持各种方法和自定义头 |
-| `fzf-filter` | `fzf-filter pattern:"keyword" input:$lines` | 模糊过滤文本行，缩小列表 |
-| `git-tar` | `git-tar action:"create" archive:"out.tar.gz" files:["src/"] compression:"gzip"` | 创建/解压 tar/zip 归档 |
-| `git-dos2unix` | `git-dos2unix file:"script.sh" mode:"dos2unix"` | 转换 CRLF ↔ LF 换行符 |
-| `grep` | `grep pattern:"somePattern" include:"*.xml" output_mode:"files_with_matches"` | 基础内容搜索（内置） |
-| `glob` | `glob pattern:"**/*.xml"` | 文件模式匹配（内置） |
-| `sd` | `sd find:"old" replace:"new" files:["file.txt"]` | 更简单的 find-replace，默认原地编辑，支持正则和字面量模式 |
-| `tokei` | `tokei path:"./"` | 按语言统计代码行数、注释、空白行。秒级出结果 |
-| `yq` | `yq expression:".Missions.NestMission[]" file:"Missions.xml" xml:true` | YAML/XML/JSON 结构化数据查询。XML 模式可直查 XML 文件（如列出所有任务 ID） |
+```
+1. 主智能体干完活 -> compress (即使没派子智能体)
+2. 派发子智能体后 -> compress (不保留规划细节)
+3. 子智能体结果验证通过 -> compress (只保留文件名+签名+状态)
+4. 全部完成集成验证后 -> compress (保留目标+产出+关键决策)
+```
 
-## When to Use Sub-Agents (Sub-Agent Trigger Guide)
+## 子智能体优先
 
-Sub-agents excel where CLI tools and built-in tools fall short:
+**Default: DELEGATE**
 
-| 场景 | 说明 | 推荐方式 |
-|------|------|---------|
-| **语义理解** | 判断代码逻辑是否正确、功能是否完整 | `task()` 派子智能体 |
-| **跨模块集成** | 多个模块的协调变更、接口对齐 | `task()` 派子智能体 |
-| **多步操作** | 需要先搜索→分析→再修改的连锁操作 | `task()` 派子智能体 |
-| **代码生成/重构** | 需要理解现有代码结构后生成新代码 | 子智能体或自行推理 |
-| **架构决策** | 设计方案选择、权衡分析 | 自行推理或 Oracle |
-| **验证与审查** | 理解代码意图、做质量判断 | 自行推理或 review-work |
+- 凡是可以委派的，一律委派
+- N 个独立逻辑单元 -> N 个并行 `run_in_background=true`
+- 子智能体内可自由调工具 (内置/CLI/MCP/LSP/web)
+- prompt 必须含 6 部分:
 
-> **注意**: 即使最终决定用子智能体，在 task() prompt 中也可以引用 CLI 工具——子智能体内部同样可以调用这些工具完成任务。
+```
+1. TASK          原子目标，一个 delegation 做一件事
+2. EXPECTED OUTCOME  交付物 + 成功标准
+3. REQUIRED TOOLS   工具白名单
+4. MUST DO       穷举需求
+5. MUST NOT DO   禁止操作
+6. CONTEXT       文件路径 + 模式 + 约束
+```
 
-## Common Mistakes
+- 单步简单操作例外 (已知文件 + 已知内容 + 单文件) -> 直接内置工具
 
-1. **跳过 CLI 检查直接 task()**：习惯性派子代理做批量替换，浪费数万 token。30s 的代理工作可能 <1s 的 CLI 命令就能完成。
+## 并行派发模式
 
-2. **用 ripgrep 找到文件后手动修改**：先 rg 搜索定位，再用 CLI 批量编辑要两步合一步。用 `git-sed` 一条命令完成搜索+替换。
+```
+// 正确: N 个独立单元并行
+task(run_in_background=true, prompt="单元A...")
+task(run_in_background=true, prompt="单元B...")
+task(run_in_background=true, prompt="单元C...")
+compress -> 结束响应，等通知
 
-3. **在单个文件上调用代理**：修改一个文件中的已知内容直接编辑即可，不需要启动完整的子代理会话。
+// 错误: 串行等待
+result1 = task(prompt="单元A...")
+result2 = task(prompt="单元B...")
+```
 
-4. **该用子智能体时却用 CLI 工具硬扛**：CLI 工具不懂语义。涉及跨模块分析、多步推理、理解代码意图的场景，用 CLI 组合拳不如一个子智能体高效。示例：需要"找到所有调用了 X 函数的文件，分析其参数模式，然后统一重构"——这是子智能体的领域，不是 sed 能搞定的。
+## 复杂任务拆分方法论
 
-5. **sd 默认原地编辑，先 `--preview` 再执行**：sd 和 sed 表现不同——sd 默认直接修改文件。实测 `sd '<?xml' '<?XML' filelist.xml` 直接改写了所有 `<?xml` 标签（63处），只能 `git checkout` 恢复。**安全步骤**: 先用 `sd --preview 'find' 'replace' file` 查看影响范围，确认无误后再执行（不加 `--preview`）。
+### 拆分原则
 
-6. **yq XML 模式 yq v3 用 `--xml`，v4 换成 `-p xml`**：yq v4 移除了 `--xml` 短参数，改用 `-p xml`。默认输出格式警告可通过 `-o yaml` 抑制。
+```
+复杂任务
+  |- 1. 识别天然边界 (模块/功能/层级/关注点)
+  |- 2. 验证独立性 (依赖否？改同文件否？)
+  |- 3. 确定粒度 (过粗质量差，过细开销大)
+        每个子智能体 = 1 个逻辑闭合的可验证交付物
+```
+
+### 5 种拆分模式
+
+| 模式 | 场景 | 做法 | 并行度 |
+|------|------|------|--------|
+| 水平 | 同层多独立模块 | 路由/组件各一个 | 全并行 |
+| 垂直 | 分层架构 | 每层一个，定义数据契约 | 流水线 |
+| 功能 | 多功能特性 | 每个功能一个 | 全并行 |
+| 阶段 | 分析->设计->实现 | 先调研再异步实现 | 调研先行 |
+| 角度 | 同一模块多维度 | 实现+测试+文档各一个 | 全并行 |
+
+### 依赖处理
+
+```
+无依赖   -> 全并行 (同时启动，同时收)
+有依赖   -> 分层并行 (层内并行，层间串行)
+部分依赖 -> 谱系并行 (核心先完成->依赖者再并行)
+```
+
+### 结果验证
+
+```
+收集 -> 每个 task 返回后:
+  |- 交付物存在？
+  |- lsp_diagnostics 干净？
+  |- 符合 MUST DO？
+  -> 通过后 compress
+
+全部完成后:
+  |- 编译/类型检查通过？
+  |- 测试通过？
+  -> 最终 compress
+```
+
+## 场景决策速查
+
+| 场景 | 该做什么 | 别做什么 |
+|------|---------|---------|
+| 单文件已知内容修改 | 直接 Edit | 别派子智能体 |
+| 多步重构/代码生成 | 拆 + 并行子智能体 | 别手动一步步 |
+| 跨模块分析 | 派 explore 并行 | 别自己一个个查 |
+| 新功能实现 | 拆 + 并行子智能体 | 别自己写所有代码 |
+| 调研不熟库 | 派 librarian | 别 webfetch 硬读 |
+| 修复已知 bug | 派一个子智能体或自推 | 别忽视 |
+
+## 工具矩阵
+
+| 层级 | 场景 | 工具 (Skill) | CLI 直接命令 | 耗时 |
+|------|------|------|------|------|
+| 子智能体 | 多步推理/代码生成/调研 | `task()` | - | 数十秒 |
+| 内置 | 文件读写编辑 | Read/Edit/Write | - | 即时 |
+| 内置 | 内容搜索 | grep | - | <1s |
+| 内置 | 文件匹配 | glob | - | <1s |
+| 内置 | 文件内容分析 | look_at | - | <1s |
+| CLI | 批量替换 | git-sed | `sd` (alias: sed) | <1s |
+| CLI | 文件查找 | fd-find | `fd` (alias: find) | <1s |
+| CLI | 内容搜索 | rg-search | `rg` (alias: grep) | <1s |
+| CLI | AST 操作 | ast-grep | `ast-grep` | <1s |
+| CLI | JSON 查询 | jq-query | `jq` | <1s |
+| CLI | XML/YAML | - | `yq` | <1s |
+| CLI | HTTP 请求 | git-curl | `curl` | <1s |
+| CLI | 模糊过滤 | fzf-filter | `fzf` | <1s |
+| CLI | 打包解压 | git-tar | - | <1s |
+| CLI | 换行符转换 | git-dos2unix | - | <1s |
+| CLI | 代码统计 | - | `tokei` | <1s |
+| CLI | 文本查看 | - | `bat` (alias: cat) | <1s |
+| CLI | 字段提取 | - | `choose` | <1s |
+| CLI | 简版 man | - | `tldr` (alias: man) | <1s |
+| CLI | 智能跳转 | - | `z` (zoxide, alias: cd) | <1s |
+| Skill | 领域专知 | 加载 skill | - | 文档 |
+| MCP | 知识图谱 | codebase-memory-mcp | - | <5s |
+| MCP | 顺序推理 | sequential-thinking | - | 步数 |
+| MCP | 网页 | fetch | - | <10s |
+| 推理 | 架构/审查 | 自推 or Oracle | - | 视复杂度 |
+
+> CLI 直接命令: 位于 `~/AppData/Local/Microsoft/WinGet/Links/` (WinGet) 和 `~/.cargo/bin/` (cargo)
+> Shell alias 通过 `~/.bashrc` + `BASH_ENV` 环境变量全局生效
+
+## CLI 速查
+
+### Skill 命令 (通过 OpenCode 调用)
+
+```
+git-sed      表达式批量替换    git-sed expression:"s/old/new/g" files:["*.ts"] inPlace:""
+fd-find      快速文件查找      fd-find pattern:"*.xml" extension:"xml" path:"./"
+rg-search    高速内容搜索      rg-search pattern:"foo" glob:"*.ts" context:2
+ast-grep     AST 搜索/替换     ast_grep_search pattern:"if($$$){}" lang:"ts"
+jq-query     JSON 查询         jq-query filter:".name" file:"data.json"
+git-curl     HTTP API 请求     git-curl url:"https://api.example.com" method:"POST"
+fzf-filter   模糊过滤          fzf-filter pattern:"keyword" input:$lines
+git-tar      打包解压          git-tar action:"create" archive:"out.tar.gz" files:["src/"]
+git-dos2unix 换行符转换        git-dos2unix file:"script.sh" mode:"dos2unix"
+```
+
+### CLI 直接命令 (PATH 中全局可用)
+
+```
+sd           简易查找替换      sd find:"old" replace:"new" files:["file.txt"]
+fd           文件查找          fd pattern:"*.xml" --extension xml
+rg           内容搜索          rg "pattern" --glob "*.ts"
+ast-grep     AST 搜索/替换     ast-grep search -p "if($$$){}" -l ts
+jq           JSON 查询         jq '.name' data.json
+yq           YAML/XML 查询     yq '.root.item' data.xml -p xml
+fzf          模糊过滤          cat file | fzf -q "keyword"
+bat          文本查看          bat file.ts
+choose       字段提取          echo "a,b,c" | choose 0
+tokei        代码统计          tokei path:"./"
+tldr         简版 man          tldr fd
+z            智能跳转          z project-name
+curl         HTTP 请求         curl -s https://api.example.com
+grep         基础搜索 (内置)   grep "foo" *.ts
+glob         文件匹配 (内置)   glob pattern:"**/*.ts"
+```
+
+> Shell alias: `find -> fd`, `grep -> rg`, `cat -> bat`, `sed -> sd`, `man -> tldr`, `cd -> z`
+
+## Session Continuation
+
+子智能体返回 `ses_...` ID。后续跟进用 `task(task_id="ses_...")`，**不要重新创建**。
+
+```
+正确: task(task_id="ses_abc123", prompt="修复: 42行类型错误")
+错误: task(category="quick", prompt="修复类型错误...")
+```
+
+## 常见错误
+
+```
+#1  自己动手不委派       -> 子智能体比你做得好
+#2  串行不并行           -> 4 个独立单元就 4 个并行
+#3  跳过 CLI 直接 task   -> git-sed 一秒搞定批量替换
+#4  找到文件后手动改      -> git-sed 一行搞定搜索+替换
+#5  单文件修改也用代理    -> 直接 Edit，别绕弯
+#6  该用子智能体却硬扛    -> CLI 不懂语义，子智能体懂
+#7  sd 不 preview        -> sd 默认直接改文件，先 --preview
+#8  yq XML 参数版本混淆   -> v4 用 -p xml 不是 --xml
+#9  prompt 太模糊        -> <5 行就是太模糊，必须 6 部分
+#10 复杂任务不拆分       -> 别让一个智能体做全局事
+#11 派发了不压缩          -> 上下文爆炸，派发完就 compress
+```
