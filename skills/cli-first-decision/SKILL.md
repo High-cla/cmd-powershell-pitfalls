@@ -1,236 +1,190 @@
 ---
 name: cli-first-decision
-description: "优先使用 CLI 工具和子智能体委派的决策框架，任何任务前先判断最优工具路径"
+description: "优先使用 CLI 工具和子智能体委派的决策框架，任何任务前先判断最优工具路径；多步操作须合并/并行调用"
 ---
 
 # CLI-First Decision
 
-## 优先级决策链
+**核心**：先选最短路径；能合并就合并；能并行就并行；闭合后 compress。
+
+## 决策流程
+
+1. 识别任务类型（修复 / 实现 / 调研 / 评估）
+2. **合并判断**（见下节）— 多步是否可同轮/管道/并行
+3. 单步简单（已知文件+内容）→ 内置工具 → compress
+4. 多步/跨模块/生成/重构 → 拆 N 独立单元 → **一次全并行派发**
+5. 机械操作 → 工具矩阵选 CLI（优先管道）
+6. 有 skill → 先加载；有 MCP → 优先用
+7. 架构/审查 → 自推或 Oracle
+
+## 多步工具调用合并（硬规则）
+
+**默认：同一响应里发出所有无依赖调用。禁止「调一个 → 等结果 → 再调下一个」的串行往返。**
+
+| 类型 | 合并方式 | 何时 | 反例（禁止） |
+|------|----------|------|--------------|
+| 内置工具 | **同轮并行** | 多个 Read/Grep/Glob/lsp/诊断互不依赖 | 先 Read A 再 Grep；先 Glob 再 Read 已知路径 |
+| CLI | **一条管道/一条 shell** | 查找→过滤→变换→替换可串 | 三次 bash：`fd` 再 `rg` 再 `jq` |
+| 子智能体 | **一次派 N 个** | 独立单元/探索角度 | 等 explore1 完再派 explore2 |
+| 混合 | **同轮批出** | CLI + Read + task 无依赖 | 先 CLI 等完再 Read 再 task |
+
+### 合并决策
 
 ```
-触发 -> 思考 -> 拆分子智能体 -> 内置工具 -> CLI -> Skill -> MCP -> 自行推理 -> 压缩
+需要 ≥2 次工具？
+  ├─ 彼此无输入依赖 → 同轮全部发出（内置并行 / 多 task 并行）
+  ├─ 可串成管道（A|B|C）→ 一条 CLI，不拆成多轮
+  ├─ 有依赖 → 层内并行，层间串行；每层仍同轮批出
+  └─ 仅 1 步且已知目标 → 直接内置，不派代理
 ```
 
-## 决策树
+### 管道优先（CLI）
 
-```
-收到请求
-  |- 识别类型：修复 / 实现 / 调研 / 评估？
-  |    |- 先理解问题本质，别急着摸工具
-  |    |- 单步简单操作？
-  |    |   (已知文件 + 已知内容)
-  |    |   -> 直接内置工具，完后 compress
-  |    |- 多步 / 跨模块 / 代码生成 / 重构 / 调研？
-  |    |   |- 拆成 N 个独立单元
-  |    |   |- 无依赖 -> 全并行
-  |    |   |- 有依赖 -> 层内并行，层间串行
-  |    |   |- 每个 prompt 必须 6 部分
-  |    |   -> task(run_in_background=true) 并行派发
-  |    |- 机械操作？
-  |    |   |- 批量替换 -> git-sed / sd
-  |    |   |- 文件查找 -> fd-find / glob
-  |    |   |- 内容搜索 -> rg-search / grep
-  |    |   |- AST 操作 -> ast-grep
-  |    |   |- JSON/YAML -> jq-query / yq
-  |    |- 有领域 skill？-> 先加载再执行
-  |    |- 有 MCP 工具？
-  |    |   |- 代码关系 -> codebase-memory-mcp
-  |    |   |- 顺序推理 -> sequential-thinking
-  |    |   |- 网页抓取 -> fetch
-  |    -> 架构/设计/审查？-> 自行推理 or Oracle
-```
+| 目标 | 合并示例 | 勿拆成 |
+|------|----------|--------|
+| 找文件再搜内容 | `fd -e ts src \| xargs rg 'pattern'` 或 `rg --glob '*.ts'` | `fd` 轮 + `rg` 轮 |
+| 搜再过滤 | `rg ... \| fzf --filter=...` | rg 结果再开一轮 fzf |
+| JSON 变换 | `curl ... \| jq '.data[]'` | curl 存盘再 jq |
+| 批量替换 | 一次 `sd`/`git-sed` 多文件 | 逐文件 Edit 循环 |
+| 统计+列表 | `tokei` 或 `fd ... \| wc` | 多轮 ls/count |
 
-## 压缩四阶段
+能一条命令完成的，**禁止**拆成多轮工具调用。
 
-```
-1. 主智能体干完活 -> compress (即使没派子智能体)
-2. 派发子智能体后 -> compress (不保留规划细节)
-3. 子智能体结果验证通过 -> compress (只保留文件名+签名+状态)
-4. 全部完成集成验证后 -> compress (保留目标+产出+关键决策)
-```
+### 内置工具同轮批
 
-## 子智能体优先
+| 场景 | 同轮发出 |
+|------|----------|
+| 改前摸底 | 相关文件 Read 全部并行 |
+| 定位符号 | Grep + Glob（或 rg/fd CLI）并行 |
+| 改后验收 | lsp_diagnostics 多文件并行 |
+| 探索 | 多个 `task(explore/librarian, run_in_background=true)` 并行 |
 
-**Default: DELEGATE**
-
-- 凡是可以委派的，一律委派
-- N 个独立逻辑单元 -> N 个并行 `run_in_background=true`
-- 子智能体内可自由调工具 (内置/CLI/MCP/LSP/web)
-- prompt 必须含 6 部分:
-
-```
-1. TASK          原子目标，一个 delegation 做一件事
-2. EXPECTED OUTCOME  交付物 + 成功标准
-3. REQUIRED TOOLS   工具白名单
-4. MUST DO       穷举需求
-5. MUST NOT DO   禁止操作
-6. CONTEXT       文件路径 + 模式 + 约束
-```
-
-- 单步简单操作例外 (已知文件 + 已知内容 + 单文件) -> 直接内置工具
-
-## 并行派发模式
-
-```
-// 正确: N 个独立单元并行
-task(run_in_background=true, prompt="单元A...")
-task(run_in_background=true, prompt="单元B...")
-task(run_in_background=true, prompt="单元C...")
-compress -> 结束响应，等通知
-
-// 错误: 串行等待
-result1 = task(prompt="单元A...")
-result2 = task(prompt="单元B...")
-```
-
-## 复杂任务拆分方法论
-
-### 拆分原则
-
-```
-复杂任务
-  |- 1. 识别天然边界 (模块/功能/层级/关注点)
-  |- 2. 验证独立性 (依赖否？改同文件否？)
-  |- 3. 确定粒度 (过粗质量差，过细开销大)
-        每个子智能体 = 1 个逻辑闭合的可验证交付物
-```
-
-### 5 种拆分模式
-
-| 模式 | 场景 | 做法 | 并行度 |
-|------|------|------|--------|
-| 水平 | 同层多独立模块 | 路由/组件各一个 | 全并行 |
-| 垂直 | 分层架构 | 每层一个，定义数据契约 | 流水线 |
-| 功能 | 多功能特性 | 每个功能一个 | 全并行 |
-| 阶段 | 分析->设计->实现 | 先调研再异步实现 | 调研先行 |
-| 角度 | 同一模块多维度 | 实现+测试+文档各一个 | 全并行 |
-
-### 依赖处理
-
-```
-无依赖   -> 全并行 (同时启动，同时收)
-有依赖   -> 分层并行 (层内并行，层间串行)
-部分依赖 -> 谱系并行 (核心先完成->依赖者再并行)
-```
-
-### 结果验证
-
-```
-收集 -> 每个 task 返回后:
-  |- 交付物存在？
-  |- lsp_diagnostics 干净？
-  |- 符合 MUST DO？
-  -> 通过后 compress
-
-全部完成后:
-  |- 编译/类型检查通过？
-  |- 测试通过？
-  -> 最终 compress
-```
-
-## 场景决策速查
-
-| 场景 | 该做什么 | 别做什么 |
-|------|---------|---------|
-| 单文件已知内容修改 | 直接 Edit | 别派子智能体 |
-| 多步重构/代码生成 | 拆 + 并行子智能体 | 别手动一步步 |
-| 跨模块分析 | 派 explore 并行 | 别自己一个个查 |
-| 新功能实现 | 拆 + 并行子智能体 | 别自己写所有代码 |
-| 调研不熟库 | 派 librarian | 别 webfetch 硬读 |
-| 修复已知 bug | 派一个子智能体或自推 | 别忽视 |
+**有依赖才串行**：例如「先搜到路径 → 再 Read 该路径」。搜之前不要瞎 Read；搜到后 **同一响应** 批 Read 所有命中。
 
 ## 工具矩阵
 
-| 层级 | 场景 | 工具 (Skill) | CLI 直接命令 | 耗时 |
-|------|------|------|------|------|
-| 子智能体 | 多步推理/代码生成/调研 | `task()` | - | 数十秒 |
-| 内置 | 文件读写编辑 | Read/Edit/Write | - | 即时 |
-| 内置 | 内容搜索 | grep | - | <1s |
-| 内置 | 文件匹配 | glob | - | <1s |
-| 内置 | 文件内容分析 | look_at | - | <1s |
-| CLI | 批量替换 | git-sed | `sd` (alias: sed) | <1s |
-| CLI | 文件查找 | fd-find | `fd` (alias: find) | <1s |
-| CLI | 内容搜索 | rg-search | `rg` (alias: grep) | <1s |
-| CLI | AST 操作 | ast-grep | `ast-grep` | <1s |
-| CLI | JSON 查询 | jq-query | `jq` | <1s |
-| CLI | XML/YAML | - | `yq` | <1s |
-| CLI | HTTP 请求 | git-curl | `curl` | <1s |
-| CLI | 模糊过滤 | fzf-filter | `fzf` | <1s |
-| CLI | 打包解压 | git-tar | - | <1s |
-| CLI | 换行符转换 | git-dos2unix | - | <1s |
-| CLI | 代码统计 | - | `tokei` | <1s |
-| CLI | 文本查看 | - | `bat` (alias: cat) | <1s |
-| CLI | 字段提取 | - | `choose` | <1s |
-| CLI | 简版 man | - | `tldr` (alias: man) | <1s |
-| CLI | 智能跳转 | - | `z` (zoxide, alias: cd) | <1s |
-| Skill | 领域专知 | 加载 skill | - | 文档 |
-| MCP | 知识图谱 | codebase-memory-mcp | - | <5s |
-| MCP | 顺序推理 | sequential-thinking | - | 步数 |
-| MCP | 网页 | fetch | - | <10s |
-| 推理 | 架构/审查 | 自推 or Oracle | - | 视复杂度 |
+| 场景 | skill / 工具 | CLI | 速度 |
+|------|--------------|-----|------|
+| 批量替换 | `git-sed` | `sd` | <1s |
+| 文件查找 | `fd-find` | `fd` | <1s |
+| 内容搜索 | `rg-search` | `rg` | <1s |
+| AST 搜索替换 | `ast-grep` | `ast-grep` | <1s |
+| JSON | `jq-query` | `jq` | <1s |
+| YAML/XML | - | `yq` | <1s |
+| HTTP | `git-curl` | `curl` | <1s |
+| 模糊过滤 | `fzf-filter` | `fzf` | <1s |
+| 代码统计 | - | `tokei` | <1s |
+| 文本查看 | - | `bat` | <1s |
+| 打包/换行 | `git-tar` / `git-dos2unix` | - | <1s |
+| 子智能体 | `task()` | - | 数十秒 |
+| 文件读写 | Read/Edit/Write | - | 即时 |
+| 内容/文件搜索 | grep / glob | - | <1s |
+| MCP 图谱 | codebase-memory-mcp | - | <5s |
+| MCP 网页 | fetch | - | <10s |
+| 推理/审查 | 自推 / Oracle | - | 视复杂度 |
 
-> CLI 直接命令: 位于 `~/AppData/Local/Microsoft/WinGet/Links/` (WinGet) 和 `~/.cargo/bin/` (cargo)
-> Shell alias 通过 `~/.bashrc` + `BASH_ENV` 环境变量全局生效
+CLI 来源: `~/AppData/Local/Microsoft/WinGet/Links/` + `~/.cargo/bin/`  
+Alias: `find→fd`, `grep→rg`, `cat→bat`, `sed→sd`, `man→tldr`, `cd→z`
 
-## CLI 速查
-
-### Skill 命令 (通过 OpenCode 调用)
+## 子智能体 Prompt（6 段必填）
 
 ```
-git-sed      表达式批量替换    git-sed expression:"s/old/new/g" files:["*.ts"] inPlace:""
-fd-find      快速文件查找      fd-find pattern:"*.xml" extension:"xml" path:"./"
-rg-search    高速内容搜索      rg-search pattern:"foo" glob:"*.ts" context:2
-ast-grep     AST 搜索/替换     ast_grep_search pattern:"if($$$){}" lang:"ts"
-jq-query     JSON 查询         jq-query filter:".name" file:"data.json"
-git-curl     HTTP API 请求     git-curl url:"https://api.example.com" method:"POST"
-fzf-filter   模糊过滤          fzf-filter pattern:"keyword" input:$lines
-git-tar      打包解压          git-tar action:"create" archive:"out.tar.gz" files:["src/"]
-git-dos2unix 换行符转换        git-dos2unix file:"script.sh" mode:"dos2unix"
+1. TASK               原子目标（一委托一事）
+2. EXPECTED OUTCOME   交付物 + 成功标准
+3. REQUIRED TOOLS     工具白名单
+4. MUST DO            穷举需求
+5. MUST NOT DO        禁止操作
+6. CONTEXT            路径 + 模式 + 约束
 ```
 
-### CLI 直接命令 (PATH 中全局可用)
+`<5` 行 = 太模糊。后续用 `task(task_id="ses_...")` 续聊，勿重建。
+
+## 并行规则（依赖）
+
+| 依赖 | 策略 |
+|------|------|
+| 无 | **全并行，同轮启动** |
+| 有 | 层内并行，层间串行 |
+| 部分 | 核心先完，依赖者再并行批出 |
+
+### 推理 / 决策并行
+
+**原则：事实收集可并行；互斥决策串行；独立判断轴同轮批出。**
+
+| 场景 | 策略 | 禁 |
+|------|------|-----|
+| 多角度摸底（架构/根因/方案） | 同轮多 explore / librarian / 自推清单并行 | 等一个结论再开下一角度 |
+| 多方案对比（A/B/C） | 同轮固定评价轴（成本/风险/契合度）并行打分，再汇总 | 先深挖 A 完再评 B |
+| 决策依赖未知事实 | **先**同轮批出所有事实工具；**再**一轮决策 | 边猜边调工具串行 |
+| 单点架构/疑难 | 一个 Oracle（或自推） | 无必要多 Oracle 重复问同一题 |
+| 正交审查（安全∥质量∥规格） | 同轮并行多审查轴（各一 task/Oracle） | 串行「先质量再安全」 |
+| 顺序推理链（强因果） | sequential-thinking **一条链** | 拆成多轮「想一步→再想一步」工具往返 |
+| 决策后执行 | 决策闭合后，执行单元仍按依赖表并行 | 决策未定就开写 |
 
 ```
-sd           简易查找替换      sd find:"old" replace:"new" files:["file.txt"]
-fd           文件查找          fd pattern:"*.xml" --extension xml
-rg           内容搜索          rg "pattern" --glob "*.ts"
-ast-grep     AST 搜索/替换     ast-grep search -p "if($$$){}" -l ts
-jq           JSON 查询         jq '.name' data.json
-yq           YAML/XML 查询     yq '.root.item' data.xml -p xml
-fzf          模糊过滤          cat file | fzf -q "keyword"
-bat          文本查看          bat file.ts
-choose       字段提取          echo "a,b,c" | choose 0
-tokei        代码统计          tokei path:"./"
-tldr         简版 man          tldr fd
-z            智能跳转          z project-name
-curl         HTTP 请求         curl -s https://api.example.com
-grep         基础搜索 (内置)   grep "foo" *.ts
-glob         文件匹配 (内置)   glob pattern:"**/*.ts"
+推理任务？
+  ├─ 需要事实？ → 同轮批出全部事实调用 → 再决策
+  ├─ 多独立判断轴？ → 同轮并行（各轴一份结果）→ 合成
+  ├─ 互斥选项且评价轴相同？ → 同轮按轴批评 → 选优
+  ├─ 强因果单链？ → 一条 sequential-thinking / 自推，不拆轮
+  └─ 已够决策 → 直接定，禁止再开「再想想」空转
 ```
 
-> Shell alias: `find -> fd`, `grep -> rg`, `cat -> bat`, `sed -> sd`, `man -> tldr`, `cd -> z`
+**决策轮本身不并行分叉**：选定路径后只沿一条主路径执行；未选中的备选 compress 掉，勿双轨实现。
 
-## Session Continuation
+## Compress 时机
 
-子智能体返回 `ses_...` ID。后续跟进用 `task(task_id="ses_...")`，**不要重新创建**。
+| 时机 | 动作 |
+|------|------|
+| 单步完成 | compress 该步 |
+| 子智能体验证通过 | 交付物？lsp？MUST DO？→ 通过后 compress（文件名+签名+状态） |
+| 功能集成验证完 | compress（目标+产出+关键决策） |
+| 派发后无其他活 | compress，结束响应等通知 |
+| context 警告 | **立即** compress |
 
-```
-正确: task(task_id="ses_abc123", prompt="修复: 42行类型错误")
-错误: task(category="quick", prompt="修复类型错误...")
-```
+## 场景速查
+
+| 场景 | 做 | 禁 |
+|------|----|----|
+| 单文件已知修改 | 直接 Edit | 派子智能体 |
+| 多文件摸底 | 同轮并行 Read/Grep | 串行逐个打开 |
+| 查找+过滤+改 | 一条 CLI 管道 | 多轮 bash 接力 |
+| 多步重构/生成 | 拆 + 同轮并行 task | 手动一步步 |
+| 跨模块分析 | 多 explore 并行 | 自己逐个查 |
+| 不熟库调研 | librarian | webfetch 硬啃 |
+| 已知 bug | 一 task 或自推 | 忽视根因 |
+| 多方案选型 | 同轮按评价轴批评 → 选优 | 串行深挖每个方案 |
+| 正交审查 | 安全∥质量∥规格同轮并行 | 先审完一个再开下一个 |
+| 决策缺事实 | 先同轮批事实再决策 | 边猜边调工具 |
 
 ## 常见错误
 
-```
-#1  自己动手不委派       -> 子智能体比你做得好
-#2  串行不并行           -> 4 个独立单元就 4 个并行
-#3  跳过 CLI 直接 task   -> git-sed 一秒搞定批量替换
-#4  找到文件后手动改      -> git-sed 一行搞定搜索+替换
-#5  单文件修改也用代理    -> 直接 Edit，别绕弯
-#6  该用子智能体却硬扛    -> CLI 不懂语义，子智能体懂
-#7  sd 不 preview        -> sd 默认直接改文件，先 --preview
-#8  yq XML 参数版本混淆   -> v4 用 -p xml 不是 --xml
-#9  prompt 太模糊        -> <5 行就是太模糊，必须 6 部分
-#10 复杂任务不拆分       -> 别让一个智能体做全局事
-#11 派发了不压缩          -> 上下文爆炸，派发完就 compress
-```
+| # | 问题 | 修正 |
+|---|------|------|
+| 1 | 自己动手不委派 | 复杂语义 → 子智能体 |
+| 2 | 串行不并行 | N 独立单元 → N 并行 |
+| 3 | **多轮工具往返** | 无依赖 → **同轮全发出** |
+| 4 | **可管道却拆轮** | `A\|B\|C` 一条命令 |
+| 5 | 跳过 CLI 直接 task | 机械替换用 sd/git-sed |
+| 6 | 找到文件后手改循环 | 一次批量替换 |
+| 7 | 单文件也派代理 | 直接 Edit |
+| 8 | CLI 不懂语义却硬 CLI | 语义任务用 task |
+| 9 | sd 不 preview | 先 `--preview` |
+| 10 | yq XML 参数混 | v4: `-p xml` |
+| 11 | prompt 模糊 | 必须 6 段 |
+| 12 | 不拆分复杂任务 | 一代理一事 |
+| 13 | 闭合不 compress | 查 Compress 表 |
+| 14 | 决策前串行摸底 | 事实调用同轮批出 |
+| 15 | 多方案串行深挖 | 同轮按轴批评再选 |
+| 16 | 决策后双轨实现 | 选定一条主路径，备选 compress |
+
+## 红旗（立刻改）
+
+- 本可并行的 Read/Grep 排成队列
+- 三次独立 bash 本可 `|` 一条
+- 等一个 explore 完再派下一个
+- 「先看看再决定调什么」却只发了 1 个工具（已知需要多个时）
+- 多判断轴（安全/质量/规格）串成队列
+- 事实未齐就开写，或决策未定双轨实现
+
+**全部意味着：合并调用，同轮批出；决策前批事实，决策后单路径。**
